@@ -21,12 +21,19 @@
 
 ## 运行
 
-无构建依赖(p5.js 走 CDN):
+无构建依赖(p5.js / MediaPipe 走 CDN):
 
 ```sh
-ruby -run -e httpd . -p 8614
-# 打开 http://127.0.0.1:8614/
+ruby -run -e httpd . -p 8614 --bind-address 0.0.0.0
+# 本机打开   http://127.0.0.1:8614/
+# 同一 Wi-Fi 下的其他电脑/平板/手机打开 http://<本机局域网IP>:8614/
+#   (IP 用 `ipconfig getifaddr en0` 查询;注意局域网 HTTP 下浏览器禁用摄像头,
+#    手势功能仅本机可用 —— 公网 + HTTPS 请开启 GitHub Pages)
 ```
+
+GitHub 仓库公开:https://github.com/hzhuangzhen1001-gif/anxiety-tug
+开启仓库 Settings → Pages(选 main 分支)后,可通过
+https://hzhuangzhen1001-gif.github.io/anxiety-tug/ 在线游玩(HTTPS,手势功能全量可用)。
 
 快捷键:`空格` 长按深呼吸,`G` 开/关手势控制,`R` 随时重开整局;调试参数 `?debug` 下 `N` 跳过本关、`K` 压力拉满、`M` 合成握拳/手掌手势、控制台 `__mockHand(kind, nx, ny)` 可注入指定手部数据。支持鼠标与触屏。手势控制需在 `localhost`/HTTPS 环境授权摄像头(本服务即满足)。
 
