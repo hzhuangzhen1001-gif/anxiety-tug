@@ -32,11 +32,11 @@
     max-width: 540px;
     text-align: center;
     color: #5B5852;
-    font-family: "Songti SC", "Noto Serif SC", "STSong", serif;
+    font-family: "Yuanti SC", "YouYuan", "Hiragino Maru Gothic ProN", "PingFang SC", sans-serif;
     box-shadow: 0 18px 60px rgba(59,58,54,.14);
   }
   .card h1 { font-size: 32px; font-weight: 600; letter-spacing: 10px; color: #3B3A36; }
-  .card h1 .en { display: block; font-size: 12px; letter-spacing: 6px; color: #9A948B; margin-top: 6px; font-family: Georgia, serif; }
+  .card h1 .en { display: block; font-size: 12px; letter-spacing: 6px; color: #9A948B; margin-top: 6px; font-family: "Yuanti SC", "PingFang SC", sans-serif; }
   .card .rule { margin: 16px 0 4px; font-size: 13.5px; line-height: 2.0; text-align: left; }
   .card .rule b { color: #B5654F; }
   .card .rule i { font-style: normal; color: #7C93A6; }
@@ -55,7 +55,7 @@
     border: none; border-radius: 999px;
     padding: 10px 40px;
     font-size: 15px; letter-spacing: 8px; text-indent: 8px;
-    font-family: "Songti SC", "Noto Serif SC", serif;
+    font-family: "Yuanti SC", "YouYuan", "Hiragino Maru Gothic ProN", "PingFang SC", sans-serif;
     cursor: pointer;
   }
   .card button.ghost { background: transparent; color: #5B5852; border: 1px solid rgba(59,58,54,.35); }
@@ -67,7 +67,7 @@
   #menu {
     position: fixed; inset: 0; z-index: 9;
     display: flex; align-items: center; justify-content: center;
-    color: #3B3A36; font-family: "Songti SC", "Noto Serif SC", "STSong", serif;
+    color: #3B3A36; font-family: "Yuanti SC", "YouYuan", "Hiragino Maru Gothic ProN", "PingFang SC", sans-serif;
     transition: opacity .7s ease; user-select: none;
   }
   #menu.hidden { opacity: 0; pointer-events: none; }
@@ -79,7 +79,7 @@
     text-shadow: 0 0 42px rgba(59, 58, 54, 0.10);
   }
   #menuTitle .en {
-    margin-top: 16px; font-family: Georgia, serif;
+    margin-top: 16px; font-family: "Yuanti SC", "PingFang SC", sans-serif;
     font-size: clamp(11px, 1.3vw, 14px);
     letter-spacing: .58em; text-indent: .58em;
     color: rgba(51, 51, 51, 0.45);
@@ -125,7 +125,7 @@
     border: 1px solid rgba(59, 58, 54, 0.30);
     background: rgba(255, 255, 255, 0.50);
     color: #333333;
-    font: 17px Georgia, serif; cursor: pointer;
+    font: 17px "Yuanti SC", "PingFang SC", sans-serif; cursor: pointer;
     backdrop-filter: blur(6px);
     transition: background .25s ease, transform .25s ease;
   }
@@ -146,7 +146,7 @@
     background: rgba(255, 255, 255, 0.72);
     border: 1px solid rgba(59, 58, 54, 0.15);
     border-radius: 16px; backdrop-filter: blur(10px);
-    font-family: "Songti SC", "Noto Serif SC", "STSong", serif;
+    font-family: "Yuanti SC", "YouYuan", "Hiragino Maru Gothic ProN", "PingFang SC", sans-serif;
     box-shadow: 0 18px 60px rgba(59, 58, 54, 0.10);
   }
   #helpPanel b { color: #B5654F; }
@@ -911,7 +911,7 @@ function draw() {
     fill(255, 255, 255, 235 * a);
     textAlign(CENTER, CENTER);
     textSize(30);
-    textFont("Songti SC, Noto Serif SC, serif");
+    textFont("Yuanti SC, YouYuan, Hiragino Maru Gothic ProN, PingFang SC, sans-serif");
     text("崩  溃", width / 2, height / 2 - 8);
     textSize(13);
     text("休息一下,把注意力带回来", width / 2, height / 2 + 26);
@@ -993,7 +993,7 @@ function drawSpiral(s, R, flowOn, dev) {
 /* HUD:心律条 / 分数 / 关卡进度 / 坚持时间 / 深呼吸冷却 */
 function drawHUD(inside) {
   const cfg = cfgOf();
-  textFont("Songti SC, Noto Serif SC, serif");
+  textFont("Yuanti SC, YouYuan, Hiragino Maru Gothic ProN, PingFang SC, sans-serif");
 
   /* 心律条(顶部居中) */
   const bw = Math.min(width * 0.42, 460), bx = width / 2 - bw / 2, by = 22;
@@ -1164,7 +1164,7 @@ function drawMenuWave(w) {
 
 /* 左下角:半透明摄像头镜像 + 手部骨骼连线 + 手势状态 */
 function drawGesturePanel() {
-  textFont("Songti SC, Noto Serif SC, serif");
+  textFont("Yuanti SC, YouYuan, Hiragino Maru Gothic ProN, PingFang SC, sans-serif");
   if (!gc.on) {
     if (gc.err || gc.gestureToast) {
       noStroke();
