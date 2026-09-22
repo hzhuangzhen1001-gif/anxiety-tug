@@ -1,0 +1,715 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>静息手势版 · Still Hands — 摄像头焦虑互动(p5.js + MediaPipe)</title>
+<!-- p5.js 渲染 + MediaPipe Hands 手部追踪(均走 CDN) -->
+<script src="https://cdn.jsdelivr.net/npm/p5@1.9.4/lib/p5.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/hands.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  html, body { width: 100%; height: 100%; overflow: hidden; background: #E9E5DF; }
+  canvas { display: block; }
+  #cam { display: none; }
+
+  /* 覆盖层(开始 / 结算):莫兰迪纸面 + 衬线字 */
+  #overlay {
+    position: fixed; inset: 0;
+    display: flex; align-items: center; justify-content: center;
+    background: rgba(233, 229, 223, 0.78);
+    backdrop-filter: blur(4px);
+    transition: opacity .5s ease;
+    z-index: 10;
+  }
+  #overlay.hidden { opacity: 0; pointer-events: none; }
+  .card {
+    background: rgba(248, 246, 242, 0.95);
+    border: 1px solid rgba(59, 58, 54, 0.18);
+    border-radius: 14px;
+    padding: 32px 42px;
+    max-width: 560px;
+    text-align: center;
+    color: #5B5852;
+    font-family: "Songti SC", "Noto Serif SC", "STSong", serif;
+    box-shadow: 0 18px 60px rgba(59,58,54,.14);
+  }
+  .card h1 { font-size: 32px; font-weight: 600; letter-spacing: 10px; color: #3B3A36; }
+  .card h1 .en { display: block; font-size: 12px; letter-spacing: 5px; color: #9A948B; margin-top: 6px; font-family: Georgia, serif; }
+  .card .rule { margin: 16px 0 4px; font-size: 13.5px; line-height: 2.05; text-align: left; }
+  .card .rule b { color: #B5654F; }
+  .card .rule i { font-style: normal; color: #7C93A6; }
+  .card .notice {
+    margin: 14px 0 2px; font-size: 12.5px; color: #8A8272;
+    border: 1px dashed rgba(59,58,54,.3); border-radius: 8px;
+    padding: 8px 12px; line-height: 1.8;
+  }
+  .card .quote { margin: 12px 0 4px; font-size: 16px; color: #8A8272; letter-spacing: 1px; }
+  .card .stats { font-size: 13px; color: #9A948B; margin: 8px 0; line-height: 1.9; }
+  .card .stats b { color: #5B5852; font-size: 15px; }
+  .card .badge {
+    display: inline-block; margin: 10px 0 2px;
+    font-size: 20px; letter-spacing: 6px; color: #6B8299;
+    border: 1px solid rgba(107,130,153,.4); border-radius: 999px;
+    padding: 8px 26px;
+  }
+  .card button {
+    margin-top: 16px;
+    background: #3B3A36; color: #E9E5DF;
+    border: none; border-radius: 999px;
+    padding: 10px 40px;
+    font-size: 15px; letter-spacing: 6px; text-indent: 6px;
+    font-family: "Songti SC", "Noto Serif SC", serif;
+    cursor: pointer;
+  }
+  .card button:hover { background: #55534D; }
+  .card .hint { margin-top: 12px; font-size: 11px; color: #B0AAA0; }
+</style>
+</head>
+<body>
+
+<!-- 摄像头源(隐藏,仅作为 MediaPipe 与角落画中画的输入) -->
+<video id="cam" playsinline muted></video>
+
+<!-- 开始 / 结算覆盖层 -->
+<div id="overlay"><div class="card" id="ovCard"></div></div>
+
+<script>
+"use strict";
+/* =====================================================================
+   静息手势版 · Still Hands — 摄像头手势控制的焦虑互动实验
+   ---------------------------------------------------------------------
+   · 右手食指尖(21 关键点之 8 号点)实时映射为画布中的小红点;
+   · 四方蓝色正弦波形通过虚线持续拉扯红点,与你的手"拔河";
+   · 握拳手势触发"深呼吸防护罩":3 秒内拉力减半 + 中心水波纹;
+   · 心率条:圈内缓降、出圈快升,满格触发"短暂崩溃"(积分受损),
+     崩溃 3 次本场结束,进入结算(存活时间 + 心理形态评语)。
+   ===================================================================== */
+
+/* ---------- 莫兰迪色板 ---------- */
+const P = {
+  paper : "#E9E5DF", ink   : "#3B3A36", wave  : "#7C93A6", waveD : "#64798C",
+  dot   : "#B5654F", spiral: "#9A948B", sage  : "#A3B39A", rose  : "#C9A9A0",
+  gold  : "#C2A878", text  : "#5B5852",
+};
+
+/* ---------- 可调参数 ---------- */
+const PULL   = 340;    // 波形拉力系数
+const HAND_K = 42;     // 指尖橡皮筋刚度(略硬于鼠标,跟手)
+const HAND_CAP = 4600; // 指尖最大拉力
+const DAMP   = 2.4;    // 阻尼
+const BD_MAX = 3;      // 崩溃次数上限 = 本场结束
+
+/* ---------- 全局状态 ---------- */
+let state = "menu";          // menu | play | over
+let T = 0, surviveT = 0;
+let score = 0;
+let stress = 0.15;           // 压力值 0..1
+let breakdowns = 0;
+let bd = { t: 0 };           // 崩溃演出计时
+let shake = 0;
+
+let dot;                     // 红点(刚体,被指尖与波形双向拉扯)
+let waves = [];
+let spirals = [];
+let ripples = [];
+let grain;
+
+let breath = { active: false, t: 0, cd: 0, rip: 0, mult: 1 };
+
+/* ---------- 手部追踪状态 ---------- */
+let camReady = false, camErr = "";
+let hand = {
+  seen: false,               // 最近是否检测到手
+  lastSeen: -9,              // 上次检测到的时间
+  x: 0, y: 0,                // 食指尖映射到画布的坐标
+  raw: false,                // 本帧"握拳"原始判定
+  hold: 0,                   // 握拳稳定保持时长(防抖)
+  fistOn: false,             // 去抖后的握拳状态
+  lms: null,                 // 最近一帧的 21 个关键点
+};
+let handsSol = null, pumpBusy = false;
+
+/* ---------- 工具 ---------- */
+const clamp = (v, a, b) => v < a ? a : v > b ? b : v;
+const rand  = (a, b) => a + Math.random() * (b - a);
+function hexRGB(h) { return [parseInt(h.slice(1,3),16), parseInt(h.slice(3,5),16), parseInt(h.slice(5,7),16)]; }
+const RGB = {}; for (const k in P) RGB[k] = hexRGB(P[k]);
+function mixC(k1, k2, t) {
+  const a = RGB[k1], b = RGB[k2];
+  return color(a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t);
+}
+
+/* 安全区半径:基准 × 呼吸系数(周期性呼吸缩放) */
+function baseR()  { return clamp(min(width, height) * 0.21, 110, 200); }
+function safeR()  { return baseR() * (1 + 0.055 * Math.sin(T * 0.9)); }
+function center() { return { x: width / 2, y: height / 2 }; }
+
+/* ---------- 实体初始化 ---------- */
+function resetEntities() {
+  dot = { x: width / 2, y: height / 2, vx: 0, vy: 0 };
+  waves = ["top", "bottom", "left", "right"].map(side => ({
+    side, ph: rand(0, TWO_PI), freq: rand(0.018, 0.028),
+    spd: rand(1.6, 2.6), amp: 0.4, surge: 0, next: rand(1.2, 3),
+  }));
+  spirals = [
+    { r: 0.60, turns: 3.0, dir:  1, spd: 1.00, ph: rand(0, TWO_PI), rot: rand(0, TWO_PI), jit: 0 },
+    { r: 0.45, turns: 2.2, dir: -1, spd: 1.40, ph: rand(0, TWO_PI), rot: rand(0, TWO_PI), jit: 0 },
+    { r: 0.76, turns: 3.8, dir: -1, spd: 0.70, ph: rand(0, TWO_PI), rot: rand(0, TWO_PI), jit: 0 },
+  ];
+  ripples = [];
+}
+
+function anchorOf(w) {
+  const m = 32;
+  switch (w.side) {
+    case "top":    return { x: width / 2, y: m };
+    case "bottom": return { x: width / 2, y: height - m };
+    case "left":   return { x: m, y: height / 2 };
+    case "right":  return { x: width - m, y: height / 2 };
+  }
+}
+
+/* ---------- 摄像头 + MediaPipe ---------- */
+const video = document.getElementById("cam");
+
+async function initCamera() {
+  try {
+    // 权限请求 8 秒无响应则超时(某些内嵌浏览器会静默挂起授权)
+    const timeout = new Promise((_, rej) =>
+      setTimeout(() => rej(new Error("权限请求超时:请在浏览器设置中允许摄像头,或换用 Chrome/Safari 打开")), 8000));
+    const stream = await Promise.race([
+      navigator.mediaDevices.getUserMedia({
+        video: { width: 640, height: 480, facingMode: "user" }, audio: false,
+      }),
+      timeout,
+    ]);
+    video.srcObject = stream;
+    await video.play();
+    camReady = true;
+    camErr = "";
+    // MediaPipe Hands:模型与 WASM 资源从 CDN 的同版本目录加载
+    handsSol = new Hands({
+      locateFile: f => `https://cdn.jsdelivr.net/npm/@mediapipe/hands@0.4.1675469240/${f}`,
+    });
+    handsSol.setOptions({
+      maxNumHands: 1, modelComplexity: 0,
+      minDetectionConfidence: 0.6, minTrackingConfidence: 0.5,
+    });
+    handsSol.onResults(onHandResults);
+    pumpFrames();
+    return true;
+  } catch (e) {
+    camErr = (e && e.message) ? e.message : String(e);
+    return false;
+  }
+}
+
+/* 逐帧把视频喂给 MediaPipe(推理是异步的,忙时不重复投喂) */
+function pumpFrames() {
+  if (camReady && !pumpBusy && video.readyState >= 2) {
+    pumpBusy = true;
+    handsSol.send({ image: video })
+      .then(() => { pumpBusy = false; })
+      .catch(() => { pumpBusy = false; });
+  }
+  requestAnimationFrame(pumpFrames);
+}
+
+/* MediaPipe 回调:21 个关键点(归一化坐标,原图左上为原点) */
+function onHandResults(results) {
+  const lms = results.multiHandLandmarks && results.multiHandLandmarks[0];
+  if (!lms) { hand.lms = null; return; }
+  hand.lms = lms;
+  hand.seen = true;
+  hand.lastSeen = T;
+  // 食指尖(8 号点)镜像映射到画布:手向右移 → 红点向右移
+  hand.x = (1 - lms[8].x) * width;
+  hand.y = lms[8].y * height;
+  // 握拳判定:食/中/无名/小指的指尖到腕距离 < 第二关节到腕距离(蜷起)
+  const wrist = lms[0];
+  const d2 = (a, b) => (a.x-b.x)**2 + (a.y-b.y)**2;
+  const folded = [[8,6],[12,10],[16,14],[20,18]]
+    .filter(([tip, pip]) => d2(lms[tip], wrist) < d2(lms[pip], wrist)).length;
+  hand.raw = folded >= 3;
+}
+
+/* ---------- 覆盖层 ---------- */
+const ov = document.getElementById("overlay");
+const ovCard = document.getElementById("ovCard");
+
+function showMenu() {
+  state = "menu";
+  ovCard.innerHTML = `
+    <h1>静 息 · 手<span class="en">STILL HANDS · MEDIAPIPE EDITION</span></h1>
+    <div class="rule">
+      允许摄像头后,<i>抬起右手、伸出食指</i>:红点会跟随你的<b>食指尖</b>移动。<br>
+      四方蓝色波形持续拉扯红点 —— 用手把它带回呼吸的<b>黑色安全圈</b>内。<br>
+      <i>握拳</i> 触发深呼吸防护罩:3 秒内拉力减半,中心扩散治愈水波纹。<br>
+      <i>心率条</i> 圈内下降、出圈上升,满格会短暂崩溃(积分受损);三次后本场结束。
+    </div>
+    <div class="notice">
+      🔒 本页面仅在本地实时处理画面,不会上传或存储任何影像。<br>
+      点击下方按钮后,浏览器会请求摄像头权限 —— 请选择「允许」。
+    </div>
+    <button id="ovGo">开启摄像头 · 入 静</button>
+    <div class="hint">需要 HTTPS 或 localhost 环境 · 也可以用空格键代替握拳(备用)</div>`;
+  ov.classList.remove("hidden");
+  document.getElementById("ovGo").addEventListener("click", async () => {
+    document.getElementById("ovGo").textContent = "正在启动摄像头…";
+    const ok = await initCamera();
+    if (ok) {
+      startRun();
+    } else {
+      ovCard.innerHTML = `
+        <h1>无法访问摄像头</h1>
+        <p class="stats">${camErr}<br>请检查浏览器权限(地址栏左侧的摄像头图标),<br>并确认没有其他程序占用摄像头。</p>
+        <button id="ovRetry">重 试</button>
+        <div class="hint">或刷新页面重新授权</div>`;
+      document.getElementById("ovRetry").addEventListener("click", showMenu);
+    }
+  });
+}
+
+function startRun() {
+  score = 0; stress = 0.15; surviveT = 0; T = 0;
+  breakdowns = 0; bd.t = 0; shake = 0;
+  breath = { active: false, t: 0, cd: 0, rip: 0, mult: 1 };
+  resetEntities();
+  state = "play";
+  ov.classList.add("hidden");
+}
+
+function gameOver() {          // 崩溃 3 次 → 结算
+  state = "over";
+  let badge, line;
+  if (score >= 1500)     { badge = "静 水 深 流"; line = "你与焦虑握手言和,像湖底一样安稳。"; }
+  else if (score >= 800) { badge = "心 湖 微 澜"; line = "微澜起伏,而你始终稳住船桨。"; }
+  else if (score >= 300) { badge = "心 浮 气 躁"; line = "风浪常在 —— 下一次,会更稳。"; }
+  else                   { badge = "风 中 之 烛"; line = "觉知到波动本身,已经是一种进步。"; }
+  ovCard.innerHTML = `
+    <h1>练 习 结 束<span class="en">SESSION COMPLETE</span></h1>
+    <div class="badge">${badge}</div>
+    <p class="quote">${line}</p>
+    <div class="stats">
+      存活时间 <b>${Math.floor(surviveT)} s</b> · 最终得分 <b>${Math.floor(score)}</b> · 崩溃 ${breakdowns} 次
+    </div>
+    <button id="ovRe">重 新 开 始</button>
+    <div class="hint">深呼吸不是逃避,是把自己轻轻带回中心。</div>`;
+  ov.classList.remove("hidden");
+  document.getElementById("ovRe").addEventListener("click", startRun);
+}
+
+/* ---------- 键盘备用:空格 = 握拳等效 ---------- */
+function keyPressed() {
+  if (key === " ") {
+    if (state === "play" && !breath.active && breath.cd <= 0) {
+      breath.active = true; breath.t = 0; breath.rip = 0;
+      spawnRipple(width/2, height/2, 0.55, baseR() * 0.3);
+    }
+    return false;
+  }
+}
+
+/* ---------- 主更新 ---------- */
+function update(dt) {
+  T += dt;
+  surviveT += dt;
+  const c = center(), R = safeR();
+
+  /* --- 深呼吸状态机:握拳(或空格)激活,最长 3s,结束进冷却 5s --- */
+  // 握拳防抖:原始判定需稳定保持 0.2s 才算"握拳",松开 0.2s 才算"张开"
+  if (hand.raw) hand.hold = Math.min(hand.hold + dt, 1);
+  else          hand.hold = Math.max(hand.hold - dt, 0);
+  const fistStable = hand.seen && hand.hold > 0.2;
+  if (fistStable && !hand.fistOn && breath.cd <= 0 && !breath.active) {
+    hand.fistOn = true;
+    breath.active = true; breath.t = 0; breath.rip = 0;
+    spawnRipple(width/2, height/2, 0.55, baseR() * 0.3);
+  }
+  if ((!fistStable) && hand.fistOn) { hand.fistOn = false; }
+  if (breath.active) {
+    breath.t += dt;
+    breath.rip -= dt;
+    if (breath.rip <= 0) {
+      spawnRipple(width/2, height/2, 0.4, baseR() * 0.35);
+      breath.rip = 0.55;
+    }
+    if (breath.t >= 3) { breath.active = false; breath.cd = 5; }
+  } else {
+    breath.cd = Math.max(0, breath.cd - dt);
+  }
+  const mTgt = breath.active ? 0.5 : 1;
+  breath.mult += (mTgt - breath.mult) * (1 - Math.exp(-3 * dt));
+
+  /* --- 手部追踪丢失检测:超过 0.4s 未见手 → 释放指尖拉力 --- */
+  if (T - hand.lastSeen > 0.4) hand.seen = false;
+
+  /* --- 波形振幅:基础正弦 + 随机涌动 --- */
+  for (const w of waves) {
+    w.surge *= Math.exp(-dt * 1.1);
+    w.next -= dt;
+    if (w.next <= 0) { w.surge += rand(0.5, 1.1); w.next = rand(1.4, 3.2); }
+    w.amp = clamp(0.45 + 0.30 * Math.sin(T * w.spd + w.ph) + w.surge, 0.08, 2.1);
+  }
+
+  /* --- 力场:四方拉力(×呼吸倍率) + 气流 + 指尖橡皮筋 --- */
+  let fx = 0, fy = 0;
+  const gustA = T * 0.12 + Math.sin(T * 0.07) * 2;
+  const gustM = (0.40 + 0.22 * Math.sin(T * 0.1 + 1)) * PULL;
+  fx += Math.cos(gustA) * gustM;
+  fy += Math.sin(gustA) * gustM;
+  for (const w of waves) {
+    const a = anchorOf(w);
+    const dx = a.x - dot.x, dy = a.y - dot.y;
+    const d = Math.hypot(dx, dy) || 1;
+    fx += dx / d * PULL * breath.mult * w.amp;
+    fy += dy / d * PULL * breath.mult * w.amp;
+  }
+  if (hand.seen && bd.t <= 0) {         // 崩溃期间短暂失控
+    let ax = (hand.x - dot.x) * HAND_K, ay = (hand.y - dot.y) * HAND_K;
+    const m = Math.hypot(ax, ay);
+    if (m > HAND_CAP) { ax *= HAND_CAP / m; ay *= HAND_CAP / m; }
+    fx += ax; fy += ay;
+  }
+  dot.vx = (dot.vx + fx * dt) * Math.exp(-DAMP * dt);
+  dot.vy = (dot.vy + fy * dt) * Math.exp(-DAMP * dt);
+  dot.x += dot.vx * dt;
+  dot.y += dot.vy * dt;
+
+  const M = 10;
+  if (dot.x < M)        { dot.x = M;        dot.vx *= -0.4; }
+  if (dot.x > width-M)  { dot.x = width-M;  dot.vx *= -0.4; }
+  if (dot.y < M)        { dot.y = M;        dot.vy *= -0.4; }
+  if (dot.y > height-M) { dot.y = height-M; dot.vy *= -0.4; }
+
+  /* --- 圈内/圈外 → 压力值 --- */
+  const dist = Math.hypot(dot.x - c.x, dot.y - c.y);
+  const inside = dist <= R;
+  if (inside) stress -= 0.05 * dt;
+  else        stress += 0.13 * dt;
+  stress = clamp(stress, 0, 1);
+
+  /* --- 计分:圈内 +10/s --- */
+  if (inside) score += 10 * dt;
+
+  /* --- 压力满格 → 短暂崩溃;3 次 → 结算 --- */
+  if (stress >= 1 && bd.t <= 0) {
+    breakdowns++;
+    bd.t = 2.4;
+    shake = 1;
+    score = Math.round(score * 0.6);
+    stress = 0.42;
+    spawnRipple(c.x, c.y, 0.6, R * 0.4);
+    if (breakdowns >= BD_MAX) { setTimeout(() => gameOver(), 1400); }
+  }
+  bd.t = Math.max(0, bd.t - dt);
+  shake *= Math.exp(-3 * dt);
+
+  /* --- 正念水波纹 --- */
+  for (const rp of ripples) { rp.r += rp.v * dt; rp.v *= 1.02; rp.a -= 0.30 * dt; }
+  while (ripples.length && ripples[0].a <= 0) ripples.shift();
+
+  /* --- 螺旋:偏离/压力越大越快越抖 --- */
+  const dev = clamp(dist / R, 0, 2);
+  for (const s of spirals) {
+    s.rot += (0.4 + 3.0 * dev * dev + 3.5 * stress) * s.dir * s.spd * dt;
+    s.jit = (Math.sin(T * 15 + s.ph * 9) + Math.sin(T * 27 + s.ph * 5)) * 0.5
+          * (0.03 + 0.2 * dev + 0.28 * stress);
+  }
+}
+
+function spawnRipple(x, y, a, r0) {
+  ripples.push({ x, y, r: r0 || 12, v: 230, a });
+  if (ripples.length > 16) ripples.shift();
+}
+
+
+/* 单侧正弦波 */
+function drawWave(w, m) {
+  const a = anchorOf(w);
+  const horiz = (w.side === "top" || w.side === "bottom");
+  const L = (horiz ? width : height) * 0.5;
+  noFill();
+  stroke(mixC("wave", "waveD", w.amp / 2.1));
+  drawingContext.globalAlpha = lerp(0.9, 0.45, 1 - m);
+  strokeWeight(2);
+  beginShape();
+  for (let u = 0; u <= 1.001; u += 1 / 110) {
+    const env = Math.sin(u * PI);
+    const off = Math.sin(u * L * w.freq + T * w.spd + w.ph) * w.amp * 13 * env;
+    const x = horiz ? a.x - L / 2 + u * L : a.x + off;
+    const y = horiz ? a.y + off : a.y - L / 2 + u * L;
+    vertex(x, y);
+  }
+  endShape();
+  drawingContext.globalAlpha = 1;
+  noStroke();
+  fill(mixC("wave", "waveD", w.amp / 2.1));
+  circle(a.x, a.y, 7);
+}
+
+function drawPullLine(w) {
+  const a = anchorOf(w);
+  drawingContext.setLineDash([6, 7]);
+  stroke(mixC("wave", "rose", danger * 0.6));
+  drawingContext.globalAlpha = 0.14 + 0.5 * clamp(w.amp / 1.6, 0, 1);
+  strokeWeight(1.2);
+  line(dot.x, dot.y, a.x, a.y);
+  drawingContext.setLineDash([]);
+  drawingContext.globalAlpha = 1;
+}
+
+function drawSpiral(s, R, dev) {
+  const T2 = s.turns * TWO_PI;
+  const rMax = R * s.r;
+  noFill();
+  stroke(P.spiral);
+  drawingContext.globalAlpha = 0.38 + 0.2 * clamp(dev - 1, 0, 1);
+  strokeWeight(1.4);
+  beginShape();
+  const N = 90;
+  for (let k = 0; k <= N; k++) {
+    const t = (k / N) * T2;
+    const r = 5 + (rMax - 5) * (k / N);
+    const a = t * s.dir + s.rot + s.jit * Math.sin(k * 0.6);
+    vertex(dot.x + Math.cos(a) * r, dot.y + Math.sin(a) * r * 0.96);
+  }
+  endShape();
+  drawingContext.globalAlpha = 1;
+}
+
+/* 角落画中画:镜像摄像头 + 手部骨骼连线 + 指尖高亮 */
+const HAND_LINKS = [
+  [0,1],[1,2],[2,3],[3,4],            // 拇指
+  [0,5],[5,6],[6,7],[7,8],            // 食指
+  [5,9],[9,10],[10,11],[11,12],       // 中指
+  [9,13],[13,14],[14,15],[15,16],     // 无名指
+  [13,17],[17,18],[18,19],[19,20],    // 小指
+  [0,17],                             // 掌根
+];
+function drawCamPiP() {
+  if (!camReady) return;
+  const cw = 210, ch = 158, cx = 18, cy = height - ch - 18;
+
+  // 镜像绘制视频帧
+  drawingContext.save();
+  drawingContext.translate(cx + cw, cy);
+  drawingContext.scale(-1, 1);
+  drawingContext.drawImage(video, 0, 0, cw, ch);
+  drawingContext.restore();
+
+  // 半透明蒙版,让画面"退后"
+  noStroke();
+  fill(233, 229, 223, 70);
+  rect(cx, cy, cw, ch);
+
+  // 手部骨骼
+  if (hand.lms) {
+    stroke(59, 58, 54, 200);
+    strokeWeight(1.4);
+    for (const [a, b] of HAND_LINKS) {
+      line(
+        cx + (1 - hand.lms[a].x) * cw, cy + hand.lms[a].y * ch,
+        cx + (1 - hand.lms[b].x) * cw, cy + hand.lms[b].y * ch
+      );
+    }
+    noStroke();
+    for (let i = 0; i < hand.lms.length; i++) {
+      fill(i === 8 ? P.dot : P.ink);
+      circle(cx + (1 - hand.lms[i].x) * cw, cy + hand.lms[i].y * ch, i === 8 ? 7 : 3.5);
+    }
+  }
+
+  // 边框与状态标签
+  noFill();
+  stroke(59, 58, 54, 120);
+  strokeWeight(1);
+  rect(cx, cy, cw, ch, 6);
+  noStroke();
+  fill(59, 58, 54, 170);
+  textAlign(LEFT, TOP);
+  textSize(10);
+  textFont("Songti SC, Noto Serif SC, serif");
+  text(hand.seen ? (hand.raw ? "手势:握拳 ✓" : "手势:食指") : "未检测到手", cx + 8, cy + 6);
+}
+
+/* HUD:心律条 / 分数 / 时间 / 深呼吸指示 / 手势提示 */
+function drawHUD(inside, dist, R) {
+  textFont("Songti SC, Noto Serif SC, serif");
+
+  /* 心率条(顶部居中) */
+  const bw = Math.min(width * 0.42, 460), bx = width / 2 - bw / 2, by = 22;
+  const beat = 1 + 0.18 * Math.sin(T * (1.2 + stress * 5) * TWO_PI);
+  noStroke();
+  fill(59, 58, 54, 40);
+  rect(bx - 2, by - 2, bw + 4, 10, 5);
+  fill(mixC("sage", "rose", stress));
+  rect(bx, by, bw * stress, 6 * beat, 3);
+  fill(P.text);
+  textAlign(RIGHT, CENTER);
+  textSize(12);
+  text("心 律", bx - 14, by + 3);
+  textAlign(LEFT, CENTER);
+  text(Math.round(stress * 100), bx + bw + 12, by + 3);
+  if (stress > 0.75) {
+    fill(mixC("rose", "dot", 0.4));
+    text("握拳 · 深呼吸", bx + bw + 50, by + 3);
+  }
+
+  /* 左上:存活时间 */
+  textAlign(LEFT, TOP);
+  fill(P.text);
+  textSize(12);
+  text("存活 " + Math.floor(surviveT) + " s", 24, 14);
+  textAlign(LEFT, TOP);
+
+  /* 右上:得分 */
+  textAlign(RIGHT, TOP);
+  fill(P.text);
+  textSize(20);
+  text(Math.floor(score), width - 26, 18);
+  textSize(11);
+  fill(154, 148, 139);
+  text("圈内 +10/s", width - 26, 46);
+  textAlign(LEFT, TOP);
+
+  /* 右下:深呼吸状态小圆 */
+  const bx2 = width - 52, by2 = height - 52;
+  noFill();
+  stroke(59, 58, 54, 60);
+  strokeWeight(4);
+  circle(bx2, by2, 44);
+  if (breath.cd > 0) {
+    stroke(P.sage);
+    arc(bx2, by2, 44, 44, -HALF_PI, -HALF_PI + (1 - breath.cd / 5) * TWO_PI);
+  } else if (breath.active) {
+    stroke(P.sage);
+    arc(bx2, by2, 44, 44, -HALF_PI, -HALF_PI + (breath.t / 3) * TWO_PI);
+  }
+  noStroke();
+  fill(P.text);
+  textAlign(CENTER, CENTER);
+  textSize(10);
+  text(breath.active ? "防护中" : (breath.cd > 0 ? breath.cd.toFixed(1) : "握拳"), bx2, by2);
+  textAlign(LEFT, TOP);
+
+  /* 手部丢失提示 */
+  if (state === "play" && !hand.seen && camReady) {
+    fill(mixC("rose", "dot", 0.4));
+    textAlign(CENTER, TOP);
+    textSize(13);
+    text("未检测到手 —— 请把手举到摄像头前", width / 2, 52);
+    textAlign(LEFT, TOP);
+  }
+}
+
+/* ================= p5 入口 ================= */
+function setup() {
+  createCanvas(windowWidth, windowHeight);
+  makeGrain();
+  resetEntities();
+  showMenu();
+}
+function windowResized() {
+  resizeCanvas(windowWidth, windowHeight);
+  makeGrain();
+}
+function makeGrain() {
+  grain = createGraphics(width, height);
+  grain.noStroke();
+  for (let i = 0; i < width * height / 900; i++) {
+    grain.fill(59, 58, 54, rand(4, 14));
+    grain.circle(random(width), random(height), rand(0.6, 1.6));
+  }
+}
+
+function draw() {
+  const dt = clamp(deltaTime / 1000, 0, 0.05);
+  if (state === "play") update(dt);
+  else {
+    // 菜单/结算时保持波形轻柔摆动作背景
+    for (const w of waves) {
+      w.surge *= Math.exp(-dt * 1.1);
+      w.amp = clamp(0.45 + 0.30 * Math.sin(T * w.spd + w.ph) + w.surge, 0.08, 2.1);
+    }
+    for (const rp of ripples) { rp.r += rp.v * dt; rp.a -= 0.30 * dt; }
+    while (ripples.length && ripples[0].a <= 0) ripples.shift();
+    T += dt;
+  }
+
+  const c = center(), R = safeR();
+  const dist = Math.hypot(dot.x - c.x, dot.y - c.y);
+  const inside = dist <= R;
+  const danger = clamp(stress * 1.4 - 0.25, 0, 1);
+
+  background(mixC("paper", "rose", danger * 0.28));
+  push();
+  if (shake > 0.01) translate(rand(-1,1) * shake * 10, rand(-1,1) * shake * 10);
+  push();
+  tint(255, 60);
+  image(grain, 0, 0);
+  pop();
+
+  noStroke();
+  fill(mixC("sage", "paper", 0.35) + "");
+  drawingContext.globalAlpha = lerp(0.05, 0.18, breath.mult) * (inside ? 1 : 0.5);
+  circle(c.x, c.y, R * 2);
+  drawingContext.globalAlpha = 1;
+  noFill();
+  stroke(mixC("ink", "rose", danger));
+  strokeWeight(2.2);
+  circle(c.x, c.y, R * 2);
+
+  for (const w of waves) drawWave(w, breath.mult);
+  for (const w of waves) drawPullLine(w);
+
+  noFill();
+  for (const rp of ripples) {
+    stroke(mixC("sage", "wave", 0.3));
+    drawingContext.globalAlpha = Math.max(0, rp.a);
+    strokeWeight(2);
+    circle(rp.x, rp.y, rp.r * 2);
+  }
+  drawingContext.globalAlpha = 1;
+
+  for (const s of spirals) drawSpiral(s, R, clamp(dist / R, 0, 2));
+
+  if (breath.active && state === "play") {
+    noFill();
+    stroke(P.sage + "");
+    drawingContext.globalAlpha = 0.55;
+    strokeWeight(1.5);
+    circle(dot.x, dot.y, 36 + 4 * Math.sin(T * 2.6));
+    drawingContext.globalAlpha = 1;
+  }
+
+  noStroke();
+  fill(mixC("dot", "rose", danger * 0.5));
+  circle(dot.x, dot.y, 14);
+  noFill();
+  stroke(248, 246, 242, 220);
+  strokeWeight(1.5);
+  circle(dot.x, dot.y, 15);
+
+  drawCamPiP();
+  drawHUD(inside, dist, R);
+
+  if (bd.t > 0) {
+    const a = clamp(bd.t / 2.4, 0, 1);
+    noStroke();
+    fill(59, 58, 54, 150 * a);
+    rect(-20, -20, width + 40, height + 40);
+    fill(233, 229, 223, 230 * a);
+    textAlign(CENTER, CENTER);
+    textSize(30);
+    textFont("Songti SC, Noto Serif SC, serif");
+    text("崩  溃", width / 2, height / 2 - 8);
+    textSize(13);
+    text("休息一下,把注意力带回来", width / 2, height / 2 + 26);
+  }
+  pop();
+}
+</script>
+</body>
+</html>
